@@ -9,7 +9,7 @@ Each song is compared to a user preference profile using a weighted sum:
 
     score = sum( weight_i × feature_score_i )
 
-Feature weights — must sum to 1.0:
+Default feature weights — must sum to 1.0 ("balanced" mode):
     genre        0.30   categorical: 1.0 if match, 0.0 if not
     mood         0.20   categorical: 1.0 if match, 0.0 if not
     energy       0.20   numerical:   1 - |user - song|
@@ -17,6 +17,14 @@ Feature weights — must sum to 1.0:
     danceability 0.10   numerical:   1 - |user - song|
     tempo_bpm    0.05   numerical:   1 - |user_norm - song_norm|  (÷ 200 first)
     acousticness 0.05   numerical:   1 - |user_pref - song|
+
+SCORING MODES  (pass mode= to recommend_songs)
+----------------------------------------------
+    "balanced"      — default weights above
+    "genre-first"   — genre weight doubled (0.50); audio features reduced
+    "mood-first"    — mood weight doubled (0.40); genre reduced to 0.15
+    "energy-focused"— energy weight doubled (0.40); genre halved to 0.15
+                      (this is also the weight-shift experiment from Phase 3)
 
 RANKING RULE  (applied in recommend_songs and rank_songs)
 ---------------------------------------------------------
@@ -37,7 +45,7 @@ from typing import Dict, List, Tuple
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Feature weights — edit these to change what the system prioritises.
+# Default feature weights ("balanced" mode). All modes must sum to 1.0.
 WEIGHTS: Dict[str, float] = {
     "genre":        0.30,
     "mood":         0.20,
@@ -46,6 +54,49 @@ WEIGHTS: Dict[str, float] = {
     "danceability": 0.10,
     "tempo_bpm":    0.05,
     "acousticness": 0.05,
+}
+
+# Preset scoring modes — each is an alternate weight distribution summing to 1.0.
+# Pass the mode name to recommend_songs(mode=...) to switch strategies.
+SCORING_MODES: Dict[str, Dict[str, float]] = {
+    # Default: balanced across genre, mood, and audio features.
+    "balanced": WEIGHTS,
+
+    # Prioritises categorical genre match above everything else.
+    # Good for users with a very specific genre identity.
+    "genre-first": {
+        "genre":        0.50,
+        "mood":         0.15,
+        "energy":       0.15,
+        "valence":      0.08,
+        "danceability": 0.07,
+        "tempo_bpm":    0.03,
+        "acousticness": 0.02,
+    },
+
+    # Prioritises emotional context over genre.
+    # Good for users who care more about vibe than genre label.
+    "mood-first": {
+        "genre":        0.15,
+        "mood":         0.40,
+        "energy":       0.20,
+        "valence":      0.12,
+        "danceability": 0.08,
+        "tempo_bpm":    0.03,
+        "acousticness": 0.02,
+    },
+
+    # Phase 3 experiment: energy weight doubled, genre weight halved.
+    # Surfaces songs with the closest energy match regardless of genre.
+    "energy-focused": {
+        "genre":        0.15,
+        "mood":         0.20,
+        "energy":       0.40,
+        "valence":      0.09,
+        "danceability": 0.09,
+        "tempo_bpm":    0.04,
+        "acousticness": 0.03,
+    },
 }
 
 MAX_TEMPO_BPM:        float = 200.0  # ceiling used to normalize tempo to [0, 1]
@@ -139,7 +190,11 @@ def load_songs(csv_path: str) -> List[Dict]:
     return songs
 
 
-def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
+def score_song(
+    user_prefs: Dict,
+    song: Dict,
+    weights: Dict[str, float] = None,
+) -> Tuple[float, List[str]]:
     """
     Score a single song against a user preference dictionary.
 
@@ -154,6 +209,9 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
         genre (str), mood (str), energy (float), valence (float),
         danceability (float), tempo_bpm (float), likes_acoustic (bool).
     """
+    # Use the provided weight set, or fall back to the default WEIGHTS.
+    w = weights if weights is not None else WEIGHTS
+
     reasons: List[str] = []
 
     # Resolve user preference values — use neutral defaults for anything missing.
@@ -168,7 +226,7 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
     # ── Categorical features (binary: match = 1.0, no match = 0.0) ──────────
 
     if fav_genre == song["genre"].lower():
-        genre_pts = WEIGHTS["genre"]
+        genre_pts = w["genre"]
         reasons.append(f"genre match: {song['genre']} (+{genre_pts:.2f})")
     else:
         genre_pts = 0.0
@@ -177,7 +235,7 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
         )
 
     if fav_mood == song["mood"].lower():
-        mood_pts = WEIGHTS["mood"]
+        mood_pts = w["mood"]
         reasons.append(f"mood match: {song['mood']} (+{mood_pts:.2f})")
     else:
         mood_pts = 0.0
@@ -188,21 +246,21 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
     # ── Numerical features (continuous similarity in [0, 1]) ─────────────────
 
     energy_sim = _numerical_similarity(tgt_energy, song["energy"])
-    energy_pts = WEIGHTS["energy"] * energy_sim
+    energy_pts = w["energy"] * energy_sim
     reasons.append(
         f"energy: song={song['energy']:.2f}, user={tgt_energy:.2f}, "
         f"similarity={energy_sim:.2f} (+{energy_pts:.3f})"
     )
 
     val_sim = _numerical_similarity(tgt_val, song["valence"])
-    val_pts = WEIGHTS["valence"] * val_sim
+    val_pts = w["valence"] * val_sim
     reasons.append(
         f"valence: song={song['valence']:.2f}, user={tgt_val:.2f}, "
         f"similarity={val_sim:.2f} (+{val_pts:.3f})"
     )
 
     dance_sim = _numerical_similarity(tgt_dance, song["danceability"])
-    dance_pts = WEIGHTS["danceability"] * dance_sim
+    dance_pts = w["danceability"] * dance_sim
     reasons.append(
         f"danceability: song={song['danceability']:.2f}, user={tgt_dance:.2f}, "
         f"similarity={dance_sim:.2f} (+{dance_pts:.3f})"
@@ -213,7 +271,7 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
         tgt_tempo / MAX_TEMPO_BPM,
         song["tempo_bpm"] / MAX_TEMPO_BPM,
     )
-    tempo_pts = WEIGHTS["tempo_bpm"] * tempo_sim
+    tempo_pts = w["tempo_bpm"] * tempo_sim
     reasons.append(
         f"tempo: song={song['tempo_bpm']:.0f} BPM, user={tgt_tempo:.0f} BPM, "
         f"similarity={tempo_sim:.2f} (+{tempo_pts:.3f})"
@@ -222,7 +280,7 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
     # likes_acoustic bool → target float.
     ac_target = ACOUSTIC_PREF_HIGH if likes_ac else ACOUSTIC_PREF_LOW
     ac_sim    = _numerical_similarity(ac_target, song["acousticness"])
-    ac_pts    = WEIGHTS["acousticness"] * ac_sim
+    ac_pts    = w["acousticness"] * ac_sim
     reasons.append(
         f"acousticness: song={song['acousticness']:.2f}, "
         f"pref={'high' if likes_ac else 'low'} (target={ac_target:.2f}), "
@@ -243,6 +301,7 @@ def recommend_songs(
     user_prefs: Dict,
     songs: List[Dict],
     k: int = 5,
+    mode: str = "balanced",
 ) -> List[Tuple[Dict, float, List[str]]]:
     """
     Score every song in the catalog and return the top-k recommendations.
@@ -261,14 +320,21 @@ def recommend_songs(
     user_prefs : Dict       — preference dict (see score_song for keys).
     songs      : List[Dict] — catalog from load_songs().
     k          : int        — max recommendations to return (default 5).
+    mode       : str        — scoring mode key from SCORING_MODES
+                             ("balanced", "genre-first", "mood-first",
+                              "energy-focused"). Unknown keys fall back to
+                             "balanced".
 
     Returns
     -------
     List of (song_dict, score, reasons) tuples, best match first.
     """
+    # Look up the weight set for the requested mode; fall back to default.
+    weights = SCORING_MODES.get(mode, WEIGHTS)
+
     # Score every song — collect (song, score, reasons) for the full catalog.
     scored: List[Tuple[Dict, float, List[str]]] = [
-        (song, *score_song(user_prefs, song))
+        (song, *score_song(user_prefs, song, weights=weights))
         for song in songs
     ]
 
