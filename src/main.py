@@ -1,33 +1,52 @@
 """
-Command line runner for the Music Recommender Simulation.
+main.py
+=======
+Command-line runner for the Music Recommender Simulation.
 
-This file helps you quickly run and test your recommender.
-
-You will implement the functions in recommender.py:
-- load_songs
-- score_song
-- recommend_songs
+Run with:
+    python -m src.main
 """
 
-from recommender import load_songs, recommend_songs
+from src.recommender import load_songs, recommend_songs
 
 
 def main() -> None:
-    songs = load_songs("data/songs.csv") 
+    # Step 1: load the catalog using the csv module.
+    songs = load_songs("data/songs.csv")
+    print(f"Loaded {len(songs)} songs.\n")
 
-    # Starter example profile
-    user_prefs = {"genre": "pop", "mood": "happy", "energy": 0.8}
+    # Step 2: define a user preference profile.
+    # Change these values to test different listener personas.
+    user_prefs = {
+        "genre":          "pop",
+        "mood":           "happy",
+        "energy":         0.8,
+        "likes_acoustic": False,
+        # Optional — defaults: valence=0.5, danceability=0.5, tempo_bpm=100
+        "valence":        0.5,
+        "danceability":   0.5,
+        "tempo_bpm":      100.0,
+    }
 
-    recommendations = recommend_songs(user_prefs, songs, k=5)
+    # Step 3: score and rank all songs, return the top k.
+    results = recommend_songs(user_prefs, songs, k=5)
 
-    print("\nTop recommendations:\n")
-    for rec in recommendations:
-        # You decide the structure of each returned item.
-        # A common pattern is: (song, score, explanation)
-        song, score, explanation = rec
-        print(f"{song['title']} - Score: {score:.2f}")
-        print(f"Because: {explanation}")
-        print()
+    # Step 4: display results in a clean, readable layout.
+    print(
+        f"Top {len(results)} recommendations  "
+        f"[genre={user_prefs['genre']!r}, "
+        f"mood={user_prefs['mood']!r}, "
+        f"energy={user_prefs['energy']}]"
+    )
+    print("=" * 62)
+
+    for rank, (song, score, reasons) in enumerate(results, start=1):
+        print(f"\n#{rank}  {song['title']}  by  {song['artist']}")
+        print(f"    Score: {score:.4f}")
+        print("    Why this song was recommended:")
+        for reason in reasons:
+            print(f"      • {reason}")
+        print("-" * 62)
 
 
 if __name__ == "__main__":
